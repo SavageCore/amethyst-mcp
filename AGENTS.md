@@ -14,6 +14,10 @@
   binary for native/AppImage/source backends.
 - Only one job runs per headless process. The client serializes `*.start`
   calls behind the active job; sync reads are unaffected.
+- The headless backend runs in a Flatpak sandbox with a private `/tmp`:
+  `install_mod` auto-stages archives under `/tmp`, `/var/tmp`,
+  `/dev/shm` or `/run` to `~/.cache/amethyst-mcp/staging/` first,
+  since the backend cannot see the host tmpfs (`archive_not_found`).
 - `waiting_for_input` job snapshots are returned, never blocked on: answer
   through `installers.requests.*` via the `call` tool.
 - tsc 6.0.3 chokes on `return f(await g(...))` spanning lines

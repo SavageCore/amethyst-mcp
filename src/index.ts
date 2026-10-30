@@ -2,7 +2,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { promises as fs } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { homedir } from "node:os";
+import { basename, join, resolve as resolvePath } from "node:path";
 import { z } from "zod";
 import { AmethystClient } from "./amethyst.js";
 
@@ -179,12 +180,31 @@ server.registerTool(
 
 // ----------------------------------------------------------------- install_mod
 
+// Prefixes invisible to the Flatpak-sandboxed headless backend, which gets a
+// private /tmp etc. instead of the host's. Archives there must be staged
+// under $HOME first (verified 2026-10-30: /tmp/opencode/accel-dist.zip failed
+// with archive_not_found, the same file under ~/Downloads installed fine).
+const SANDBOX_HIDDEN_PREFIXES = ["/tmp/", "/var/tmp/", "/dev/shm/", "/run/"];
+
+function isSandboxHidden(abs: string): boolean {
+  if (SANDBOX_HIDDEN_PREFIXES.some((p) => abs === p.slice(0, -1) || abs.startsWith(p))) return true;
+  return false;
+}
+
+async function stageForSandbox(abs: string): Promise<string> {
+  const dir = join(homedir(), ".cache", "amethyst-mcp", "staging");
+  await fs.mkdir(dir, { recursive: true });
+  const staged = join(dir, basename(abs));
+  await fs.copyFile(abs, staged);
+  return staged;
+}
+
 server.registerTool(
   "install_mod",
   {
     title: "Install a local mod archive",
     description:
-      "Install a local mod ZIP (e.g. a freshly built dist/ archive) into an Amethyst profile via downloads.install.start with an absolute archive_path. Local archives do not need to be in a scanned download directory. Returns the final job snapshot. If the job waits for installer input, answer through the call tool (installers.requests.get/submit).",
+      "Install a local mod ZIP (e.g. a freshly built dist/ archive) into an Amethyst profile via downloads.install.start with an absolute archive_path. Local archives do not need to be in a scanned download directory. The headless backend runs in a Flatpak sandbox with a private /tmp, so archives under /tmp, /var/tmp, /dev/shm or /run are automatically staged under ~/.cache/amethyst-mcp/staging/ first; prefer paths under /home. Returns the final job snapshot. If the job waits for installer input, answer through the call tool (installers.requests.get/submit).",
     inputSchema: {
       archive_path: z.string().describe("Absolute path to the mod archive ZIP"),
       game: gameParam,
@@ -201,10 +221,11 @@ server.registerTool(
       const abs = resolvePath(archive_path);
       const stat = await fs.stat(abs).catch(() => null);
       if (!stat?.isFile()) return jsonResult({ error: `Not a file: ${abs}` });
+      const visible = isSandboxHidden(abs) ? await stageForSandbox(abs) : abs;
       const params: Record<string, unknown> = {
         game,
         profile,
-        archive_path: abs,
+        archive_path: visible,
         if_exists,
         installer_policy,
       };
